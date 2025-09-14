@@ -230,7 +230,21 @@ class GitRepository:
 
     def _parse_diff_line(self, line: str) -> Optional[FileChange]:
         """Parse a single line from git diff --name-status output."""
-        parts = line.split("\t")
+        # Handle quoted filenames (git uses C-style quoting for special chars)
+        if line.startswith('"') and line.endswith('"'):
+            # Git quotes the entire line when any filename contains special chars
+            try:
+                # Remove outer quotes and decode C-style escapes
+                unquoted = line[1:-1]
+                # Simple decode for common cases: \\t -> \t, \\n -> \n
+                unquoted = unquoted.replace('\\t', '\t').replace('\\n', '\n').replace('\\\\', '\\')
+                parts = unquoted.split("\t")
+            except (UnicodeDecodeError, ValueError):
+                # Fallback to simple split if decoding fails
+                parts = line.split("\t")
+        else:
+            parts = line.split("\t")
+            
         if len(parts) < 2:
             return None
 

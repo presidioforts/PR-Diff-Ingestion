@@ -23,11 +23,16 @@ class CapacityManager:
         self.omitted_files_count = 0
 
         for file in files:
-            # Calculate file size
-            file_size = self._calculate_file_size(file)
+            # Apply per-file cap first to get the actual size after truncation
+            original_file_size = self._calculate_file_size(file)
+            if original_file_size > self.config.cap_file:
+                file = self._apply_per_file_cap(file)
+            
+            # Calculate actual file size after potential truncation
+            final_file_size = self._calculate_file_size(file)
 
-            # Check global cap
-            if self.total_bytes_used + file_size > self.config.cap_total:
+            # Check global cap with post-truncation size
+            if self.total_bytes_used + final_file_size > self.config.cap_total:
                 # Exceed global cap - include metadata only
                 original_hunk_count = len(file.hunks) if file.hunks else 0
                 file.hunks = []
@@ -35,10 +40,6 @@ class CapacityManager:
                 self.omitted_files_count += 1
                 processed_files.append(file)
                 continue
-
-            # Apply per-file cap
-            if file_size > self.config.cap_file:
-                file = self._apply_per_file_cap(file)
 
             processed_files.append(file)
             self.total_bytes_used += self._calculate_file_size(file)
@@ -70,53 +71,29 @@ class CapacityManager:
             file.omitted_hunks_count = original_hunk_count
             return file
 
-        # Apply truncation logic: keep first and last hunks, truncate middle
+        # Apply truncation logic: include hunks until we hit the cap
         original_hunk_count = len(file.hunks)
         truncated_hunks = []
         current_size = 0
-        omitted_count = 0
-
-        # Always try to include first hunk
-        if file.hunks:
-            first_hunk = file.hunks[0]
-            first_size = len(first_hunk.patch.encode("utf-8"))
-            if first_size <= self.config.cap_file:
-                truncated_hunks.append(first_hunk)
-                current_size += first_size
-
-        # Try to include last hunk if different from first
-        if len(file.hunks) > 1:
-            last_hunk = file.hunks[-1]
-            last_size = len(last_hunk.patch.encode("utf-8"))
-            if current_size + last_size <= self.config.cap_file:
-                # Reserve space for last hunk
-                remaining_space = self.config.cap_file - current_size - last_size
-                
-                # Try to include middle hunks
-                for i, hunk in enumerate(file.hunks[1:-1], 1):
-                    hunk_size = len(hunk.patch.encode("utf-8"))
-                    if hunk_size <= remaining_space:
-                        truncated_hunks.append(hunk)
-                        remaining_space -= hunk_size
-                    else:
-                        # Try to include a truncated version with reduced context
-                        truncated_hunk = self._truncate_hunk_context(hunk, remaining_space)
-                        if truncated_hunk:
-                            truncated_hunks.append(truncated_hunk)
-                            break
-                        else:
-                            omitted_count += 1
-
-                # Add remaining omitted hunks to count
-                omitted_count += len(file.hunks) - len(truncated_hunks) - 1
-
-                # Add last hunk
-                truncated_hunks.append(last_hunk)
+        
+        # Include hunks until we exceed the per-file cap
+        for hunk in file.hunks:
+            hunk_size = len(hunk.patch.encode("utf-8"))
+            if current_size + hunk_size <= self.config.cap_file:
+                truncated_hunks.append(hunk)
+                current_size += hunk_size
             else:
-                # Can't fit last hunk, count all remaining as omitted
-                omitted_count = len(file.hunks) - len(truncated_hunks)
+                # Try to include a truncated version with reduced context
+                remaining_space = self.config.cap_file - current_size
+                if remaining_space > 50:  # Only try if we have reasonable space
+                    truncated_hunk = self._truncate_hunk_context(hunk, remaining_space)
+                    if truncated_hunk:
+                        truncated_hunks.append(truncated_hunk)
+                        current_size += len(truncated_hunk.patch.encode("utf-8"))
+                break
 
         # Update file with truncated hunks
+        omitted_count = original_hunk_count - len(truncated_hunks)
         if omitted_count > 0:
             file.truncated = True
             file.omitted_hunks_count = omitted_count

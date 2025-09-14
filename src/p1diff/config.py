@@ -2,7 +2,7 @@
 
 import os
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 
 @dataclass(frozen=True)
@@ -69,7 +69,7 @@ class DiffConfig:
         )
         return env
 
-    def to_provenance_dict(self) -> dict[str, any]:
+    def to_provenance_dict(self) -> Dict[str, Any]:
         """Convert config to provenance dictionary for output."""
         return {
             "repo_url": self.repo_url,
