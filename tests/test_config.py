@@ -108,6 +108,8 @@ class TestDiffConfig:
 
     def test_git_env(self):
         """Test git environment variables."""
+        import os
+        
         config = DiffConfig(
             repo_url="https://example.com/repo.git",
             commit_good="abc123",
@@ -116,8 +118,12 @@ class TestDiffConfig:
 
         env = config.git_env
         assert env["LC_ALL"] == "C"
-        assert env["GIT_CONFIG_GLOBAL"] == "/dev/null"
-        assert env["GIT_CONFIG_SYSTEM"] == "/dev/null"
+        
+        # Check platform-appropriate null device
+        expected_null = "NUL" if os.name == "nt" else "/dev/null"
+        assert env["GIT_CONFIG_GLOBAL"] == expected_null
+        assert env["GIT_CONFIG_SYSTEM"] == expected_null
+        
         assert env["GIT_TERMINAL_PROMPT"] == "0"
         assert env["GIT_ASKPASS"] == "echo"
         assert env["SSH_ASKPASS"] == "echo"

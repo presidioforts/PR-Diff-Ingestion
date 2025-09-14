@@ -67,7 +67,14 @@ class GitRepository:
         capture_output: bool = True,
     ) -> subprocess.CompletedProcess:
         """Run git command with proper environment and error handling."""
-        cmd = ["git"] + args
+        # Enforce deterministic git behavior across platforms
+        cmd = [
+            "git",
+            "-c",
+            "core.autocrlf=false",
+            "-c",
+            "color.ui=false",
+        ] + args
         try:
             result = subprocess.run(
                 cmd,
@@ -132,14 +139,30 @@ class GitRepository:
             "--no-checkout",
             "--filter=blob:none",
             self.config.repo_url,
-            str(self.workdir),
+            ".",  # clone into the already-created empty workdir
         ]
 
         if self.config.branch_name:
             clone_args.extend(["--branch", self.config.branch_name])
 
         try:
-            self._run_git(clone_args, timeout=300)
+            # Run clone within the empty workdir so target "." is valid
+            result = subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "core.autocrlf=false",
+                    "-c",
+                    "color.ui=false",
+                ]
+                + clone_args,
+                cwd=self.workdir,
+                env=self.config.git_env,
+                timeout=300,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
         except Exception as e:
             raise CloneFailedError(self.config.repo_url, str(e)) from e
 
@@ -278,14 +301,22 @@ class GitRepository:
             try:
                 result = self._run_git([
                     "ls-tree",
+                    "-l",
                     self.config.commit_good,
                     path_old,
                 ])
-                if result.stdout.strip():
-                    parts = result.stdout.strip().split()
-                    if len(parts) >= 4:
-                        mode_old = parts[0]
-                        size_old = int(parts[3]) if parts[3].isdigit() else None
+                output = result.stdout.strip()
+                if output:
+                    # Expected: "<mode> <type> <object> <size>\t<path>" (size only for blobs)
+                    meta_and_path = output.split("\t", 1)
+                    meta_parts = meta_and_path[0].split()
+                    if len(meta_parts) >= 3:
+                        mode_old = meta_parts[0]
+                        if len(meta_parts) >= 4 and meta_parts[1] != "commit":
+                            try:
+                                size_old = int(meta_parts[3])
+                            except ValueError:
+                                size_old = None
             except subprocess.CalledProcessError:
                 pass
 
@@ -294,14 +325,21 @@ class GitRepository:
             try:
                 result = self._run_git([
                     "ls-tree",
+                    "-l",
                     self.config.commit_candidate,
                     path_new,
                 ])
-                if result.stdout.strip():
-                    parts = result.stdout.strip().split()
-                    if len(parts) >= 4:
-                        mode_new = parts[0]
-                        size_new = int(parts[3]) if parts[3].isdigit() else None
+                output = result.stdout.strip()
+                if output:
+                    meta_and_path = output.split("\t", 1)
+                    meta_parts = meta_and_path[0].split()
+                    if len(meta_parts) >= 3:
+                        mode_new = meta_parts[0]
+                        if len(meta_parts) >= 4 and meta_parts[1] != "commit":
+                            try:
+                                size_new = int(meta_parts[3])
+                            except ValueError:
+                                size_new = None
             except subprocess.CalledProcessError:
                 pass
 
@@ -334,16 +372,8 @@ class GitRepository:
                     is_submodule = True
                     return is_binary, is_submodule
 
-            # Check if binary using git's detection
+            # Check if binary using git's detection (single invocation)
             try:
-                self._run_git([
-                    "diff",
-                    "--numstat",
-                    f"{self.config.commit_good}..{self.config.commit_candidate}",
-                    "--",
-                    check_path,
-                ])
-                # If numstat succeeds, check the output for binary indicator
                 result = self._run_git([
                     "diff",
                     "--numstat",
@@ -352,8 +382,9 @@ class GitRepository:
                     check_path,
                 ])
                 if result.stdout.strip():
-                    line = result.stdout.strip().split("\n")[0]
-                    if line.startswith("-\t-\t"):
+                    first = result.stdout.strip().split("\n")[0]
+                    # Binary shows as "-\t-\t<path>"
+                    if first.startswith("-\t-\t"):
                         is_binary = True
             except subprocess.CalledProcessError:
                 pass

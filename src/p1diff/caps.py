@@ -29,8 +29,9 @@ class CapacityManager:
             # Check global cap
             if self.total_bytes_used + file_size > self.config.cap_total:
                 # Exceed global cap - include metadata only
+                original_hunk_count = len(file.hunks) if file.hunks else 0
                 file.hunks = []
-                file.omitted_hunks_count = len(file.hunks) if file.hunks else 0
+                file.omitted_hunks_count = original_hunk_count
                 self.omitted_files_count += 1
                 processed_files.append(file)
                 continue
@@ -63,9 +64,10 @@ class CapacityManager:
         # Check if this is a generated file that should be summarized
         file_path = file.path_new or file.path_old
         if file_path and FilePolicies.should_summarize_when_oversized(file_path):
+            original_hunk_count = len(file.hunks)
             file.summarized = True
             file.hunks = []
-            file.omitted_hunks_count = len(file.hunks)
+            file.omitted_hunks_count = original_hunk_count
             return file
 
         # Apply truncation logic: keep first and last hunks, truncate middle

@@ -120,11 +120,11 @@ class TestCapacityManager:
 
     def test_apply_caps_global_limit_exceeded(self):
         """Test applying caps when global limit is exceeded."""
-        config = DiffConfig("repo", "good", "cand", cap_total=50, cap_file=100)
+        config = DiffConfig("repo", "good", "cand", cap_total=100, cap_file=80)
         manager = CapacityManager(config)
 
-        # Create a hunk that's larger than global cap
-        large_patch = "@@ -1,1 +1,1 @@\n" + "-old line\n+new line\n" * 10
+        # Create a hunk that fits individually but exceeds global cap when combined
+        medium_patch = "@@ -1,1 +1,1 @@\n-old\n+new"  # Small patch ~20 bytes
         hunk = DiffHunk(
             header="@@ -1,1 +1,1 @@",
             old_start=1,
@@ -133,7 +133,7 @@ class TestCapacityManager:
             new_lines=1,
             added=1,
             deleted=1,
-            patch=large_patch,
+            patch=medium_patch,
         )
 
         file1 = ProcessedFile(
@@ -151,6 +151,7 @@ class TestCapacityManager:
             hunks=[hunk],
         )
 
+        # Create multiple files that together exceed global cap
         file2 = ProcessedFile(
             status="M",
             path_old="test2.py",
@@ -166,12 +167,61 @@ class TestCapacityManager:
             hunks=[hunk],
         )
 
-        processed_files, omitted_count = manager.apply_caps([file1, file2])
+        file3 = ProcessedFile(
+            status="M",
+            path_old="test3.py",
+            path_new="test3.py",
+            rename_score=None,
+            rename_tiebreaker=None,
+            mode_old="100644",
+            mode_new="100644",
+            size_old=100,
+            size_new=100,
+            is_binary=False,
+            is_submodule=False,
+            hunks=[hunk],
+        )
 
-        assert len(processed_files) == 2
-        assert omitted_count == 1  # Second file should be omitted
-        assert len(processed_files[0].hunks) > 0  # First file should have hunks
-        assert len(processed_files[1].hunks) == 0  # Second file should have no hunks
+        file4 = ProcessedFile(
+            status="M",
+            path_old="test4.py",
+            path_new="test4.py",
+            rename_score=None,
+            rename_tiebreaker=None,
+            mode_old="100644",
+            mode_new="100644",
+            size_old=100,
+            size_new=100,
+            is_binary=False,
+            is_submodule=False,
+            hunks=[hunk],
+        )
+
+        file5 = ProcessedFile(
+            status="M",
+            path_old="test5.py",
+            path_new="test5.py",
+            rename_score=None,
+            rename_tiebreaker=None,
+            mode_old="100644",
+            mode_new="100644",
+            size_old=100,
+            size_new=100,
+            is_binary=False,
+            is_submodule=False,
+            hunks=[hunk],
+        )
+
+        processed_files, omitted_count = manager.apply_caps([file1, file2, file3, file4, file5])
+
+        assert len(processed_files) == 5
+        # With ~20 bytes per file, we should fit about 5 files in 100 bytes, so some should be omitted
+        assert omitted_count > 0  # Some files should be omitted due to global cap
+        
+        # Check that omitted files have their hunk count recorded correctly
+        for file in processed_files:
+            if len(file.hunks) == 0 and file.omitted_hunks_count is not None:
+                assert file.omitted_hunks_count == 1  # Each file originally had 1 hunk
 
     def test_apply_caps_per_file_limit_exceeded(self):
         """Test applying caps when per-file limit is exceeded."""

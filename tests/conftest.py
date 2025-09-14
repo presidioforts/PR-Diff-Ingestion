@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Generator
+from typing import Generator, List
 
 import pytest
 
@@ -72,7 +72,7 @@ class GitRepoHelper:
             "GIT_COMMITTER_EMAIL": "test@example.com",
         })
 
-    def run_git(self, args: list[str]) -> subprocess.CompletedProcess:
+    def run_git(self, args: List[str]) -> subprocess.CompletedProcess:
         """Run git command in the repository."""
         return subprocess.run(
             ["git"] + args,
@@ -99,7 +99,7 @@ class GitRepoHelper:
         if file_path.exists():
             file_path.unlink()
 
-    def add_and_commit(self, message: str, files: list[str] = None) -> str:
+    def add_and_commit(self, message: str, files: List[str] = None) -> str:
         """Add files and create a commit, return commit SHA."""
         if files:
             for file in files:

@@ -2,7 +2,7 @@
 
 import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import Dict, Optional
 
 
 @dataclass(frozen=True)
@@ -49,14 +49,18 @@ class DiffConfig:
             raise ValueError("find_renames_threshold must be between 0 and 100")
 
     @property
-    def git_env(self) -> dict[str, str]:
+    def git_env(self) -> Dict[str, str]:
         """Get Git environment variables for deterministic output."""
         env = os.environ.copy()
+        
+        # Use platform-appropriate null device
+        null_device = "NUL" if os.name == "nt" else "/dev/null"
+        
         env.update(
             {
                 "LC_ALL": "C",
-                "GIT_CONFIG_GLOBAL": "/dev/null",
-                "GIT_CONFIG_SYSTEM": "/dev/null",
+                "GIT_CONFIG_GLOBAL": null_device,
+                "GIT_CONFIG_SYSTEM": null_device,
                 "GIT_TERMINAL_PROMPT": "0",
                 "GIT_ASKPASS": "echo",
                 "SSH_ASKPASS": "echo",
