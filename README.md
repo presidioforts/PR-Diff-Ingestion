@@ -84,6 +84,254 @@ p1diff --repo https://github.com/user/repo.git --good abc123 --cand def456 \
        --keep-workdir --keep-on-error
 ```
 
+## Usage Guide
+
+This section provides step-by-step instructions for testing and using the P1 Diff tool with real repositories.
+
+### Prerequisites
+
+1. **Environment Setup**
+   ```bash
+   # Ensure you're in the project directory
+   cd C:\Users\krish\AIDevWorkspace\PR-Diff-Ingestion
+   
+   # Activate virtual environment (Windows)
+   venv311\Scripts\Activate.ps1
+   
+   # Verify Python version
+   python --version  # Should show Python 3.11+
+   ```
+
+2. **Verify Installation**
+   ```bash
+   # Check if the tool is properly installed
+   python -m p1diff.main --help
+   ```
+
+### Testing with Real Repository
+
+Here's a complete example using a real repository:
+
+**Repository**: `https://github.com/presidioforts/direct-finetune-rag-model.git`
+**Baseline Commit**: `ba7765dd48c0ba51f4fd12cde48fd100aecdb743`
+**Candidate Commit**: `d7a39abec5a282b9955afdd1649a5f1bafae35f7`
+**Branch**: `codex/move-prompts-to-external-template-files`
+
+#### Step 1: Basic Test
+```bash
+python -m p1diff.main \
+  --repo https://github.com/presidioforts/direct-finetune-rag-model.git \
+  --good ba7765dd48c0ba51f4fd12cde48fd100aecdb743 \
+  --cand d7a39abec5a282b9955afdd1649a5f1bafae35f7 \
+  --branch codex/move-prompts-to-external-template-files
+```
+
+#### Step 2: Save Output to File
+```bash
+python -m p1diff.main \
+  --repo https://github.com/presidioforts/direct-finetune-rag-model.git \
+  --good ba7765dd48c0ba51f4fd12cde48fd100aecdb743 \
+  --cand d7a39abec5a282b9955afdd1649a5f1bafae35f7 \
+  --branch codex/move-prompts-to-external-template-files \
+  --json test_output.json
+```
+
+#### Step 3: Verify Output
+```bash
+# Check if file was created
+ls test_output.json
+
+# View first 20 lines of JSON output
+Get-Content test_output.json | Select-Object -First 20
+
+# Check file size
+(Get-Item test_output.json).Length
+```
+
+#### Step 4: Test Determinism
+```bash
+# Run the same command twice with different output files
+python -m p1diff.main \
+  --repo https://github.com/presidioforts/direct-finetune-rag-model.git \
+  --good ba7765dd48c0ba51f4fd12cde48fd100aecdb743 \
+  --cand d7a39abec5a282b9955afdd1649a5f1bafae35f7 \
+  --branch codex/move-prompts-to-external-template-files \
+  --json output1.json
+
+python -m p1diff.main \
+  --repo https://github.com/presidioforts/direct-finetune-rag-model.git \
+  --good ba7765dd48c0ba51f4fd12cde48fd100aecdb743 \
+  --cand d7a39abec5a282b9955afdd1649a5f1bafae35f7 \
+  --branch codex/move-prompts-to-external-template-files \
+  --json output2.json
+
+# Compare checksums (should be identical)
+python -c "
+import json
+with open('output1.json') as f1, open('output2.json') as f2:
+    data1 = json.load(f1)
+    data2 = json.load(f2)
+    checksum1 = data1['data']['provenance']['checksum']
+    checksum2 = data2['data']['provenance']['checksum']
+    print(f'Checksum 1: {checksum1}')
+    print(f'Checksum 2: {checksum2}')
+    print(f'Deterministic: {checksum1 == checksum2}')
+"
+```
+
+#### Step 5: Test Capacity Management
+```bash
+# Test with smaller caps to see truncation in action
+python -m p1diff.main \
+  --repo https://github.com/presidioforts/direct-finetune-rag-model.git \
+  --good ba7765dd48c0ba51f4fd12cde48fd100aecdb743 \
+  --cand d7a39abec5a282b9955afdd1649a5f1bafae35f7 \
+  --branch codex/move-prompts-to-external-template-files \
+  --cap-total 50000 --cap-file 10000 \
+  --json small_caps.json
+```
+
+#### Step 6: Debug Mode
+```bash
+# Test with workspace preservation for debugging
+python -m p1diff.main \
+  --repo https://github.com/presidioforts/direct-finetune-rag-model.git \
+  --good ba7765dd48c0ba51f4fd12cde48fd100aecdb743 \
+  --cand d7a39abec5a282b9955afdd1649a5f1bafae35f7 \
+  --branch codex/move-prompts-to-external-template-files \
+  --keep-workdir --json debug_output.json
+```
+
+#### Step 7: Analyze Results
+```bash
+# Parse and analyze the JSON output
+python -c "
+import json
+with open('test_output.json') as f:
+    data = json.load(f)
+    
+if data['ok']:
+    payload = data['data']
+    print(f'✅ Success!')
+    print(f'Repository: {payload[\"provenance\"][\"repo_url\"]}')
+    print(f'Files changed: {len(payload[\"files\"])}')
+    print(f'Omitted files: {payload[\"omitted_files_count\"]}')
+    print(f'Git version: {payload[\"provenance\"][\"git_version\"]}')
+    print(f'Checksum: {payload[\"provenance\"][\"checksum\"]}')
+    print(f'Notes: {payload[\"notes\"]}')
+    
+    # Show file types
+    statuses = {}
+    for file in payload['files']:
+        status = file['status']
+        statuses[status] = statuses.get(status, 0) + 1
+    print(f'File changes by type: {statuses}')
+else:
+    print(f'❌ Error: {data[\"error\"][\"code\"]} - {data[\"error\"][\"message\"]}')
+"
+```
+
+#### Step 8: Performance Test
+```bash
+# Measure execution time (PowerShell)
+Measure-Command { 
+  python -m p1diff.main \
+    --repo https://github.com/presidioforts/direct-finetune-rag-model.git \
+    --good ba7765dd48c0ba51f4fd12cde48fd100aecdb743 \
+    --cand d7a39abec5a282b9955afdd1649a5f1bafae35f7 \
+    --branch codex/move-prompts-to-external-template-files \
+    --json perf_test.json 
+}
+```
+
+### Common Use Cases
+
+#### 1. Code Review Analysis
+```bash
+# Generate diff for code review
+p1diff --repo https://github.com/user/repo.git \
+       --good main --cand feature-branch \
+       --json code_review.json
+```
+
+#### 2. Release Comparison
+```bash
+# Compare two release tags
+p1diff --repo https://github.com/user/repo.git \
+       --good v1.0.0 --cand v2.0.0 \
+       --cap-total 2000000 --json release_diff.json
+```
+
+#### 3. Local Repository Analysis
+```bash
+# Analyze local repository changes
+p1diff --repo /path/to/local/repo \
+       --good HEAD~5 --cand HEAD \
+       --json local_changes.json
+```
+
+#### 4. Large Repository with Custom Settings
+```bash
+# Handle large repositories with custom caps and rename detection
+p1diff --repo https://github.com/large/repo.git \
+       --good abc123 --cand def456 \
+       --cap-total 5000000 --cap-file 200000 \
+       --find-renames 80 --context 5 \
+       --json large_repo.json
+```
+
+### Validation Checklist
+
+When testing, verify these key aspects:
+
+- [ ] **Success Response**: JSON contains `"ok": true`
+- [ ] **Deterministic Output**: Same checksum across multiple runs
+- [ ] **File Changes**: Actual changes between commits are captured
+- [ ] **Capacity Management**: Truncation works with small caps
+- [ ] **Performance**: Completes in reasonable time (< 30s for most repos)
+- [ ] **Git Version**: Shows your local git version (≥2.30)
+- [ ] **Error Handling**: Graceful handling of invalid inputs
+
+### Troubleshooting
+
+#### Common Issues
+
+1. **Network Errors**
+   ```bash
+   # Check internet connection and repository access
+   git ls-remote https://github.com/user/repo.git
+   ```
+
+2. **Git Version Errors**
+   ```bash
+   # Ensure git ≥2.30 is installed
+   git --version
+   ```
+
+3. **Permission Errors**
+   ```bash
+   # Verify repository access
+   git clone https://github.com/user/repo.git temp_test
+   rm -rf temp_test
+   ```
+
+4. **Memory Issues**
+   ```bash
+   # Try with smaller caps first
+   p1diff --repo <url> --good <sha> --cand <sha> \
+          --cap-total 100000 --cap-file 10000
+   ```
+
+#### Debug Mode
+
+For troubleshooting, use debug flags:
+```bash
+p1diff --repo <url> --good <sha> --cand <sha> \
+       --keep-workdir --keep-on-error --json debug.json
+```
+
+This preserves the temporary workspace for manual inspection.
+
 ## Output Format
 
 The tool outputs JSON with a consistent envelope structure:
