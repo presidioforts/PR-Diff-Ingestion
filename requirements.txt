@@ -1,0 +1,4 @@
+# Production dependencies
+# None - using only Python standard library as per spec
+
+# Development dependencies (install with: pip install -r requirements-dev.txt)

@@ -1,164 +1,274 @@
-# Prompt: Implement **P1 — Diff Ingestion** (Code-only, Clone-first)
+# P1 Diff Ingestion Tool
 
-## GOAL (what to build)
+A deterministic Git diff ingestion tool that produces stable JSON output for code analysis workflows.
 
-Build a small CLI tool that takes a **repo URL** and **two commit SHAs**, clones the repo to a temp workspace, computes a **deterministic, capped, per-file unified diff**, and outputs a **stable JSON** document with per-file entries, hunks, and flags. **Do not** use commit messages. Code-only.
+## Overview
 
-* Defaults (must be configurable by flags):
+P1 Diff is a production-ready CLI tool that takes a repository URL and two commit SHAs, clones the repository to a temporary workspace, computes deterministic per-file unified diffs with strict byte caps, and outputs a stable JSON payload for downstream analysis.
 
-  * **rename detection:** ON at **90%**
-  * **context lines per hunk:** **3**
-  * **per-file cap:** **64 KB** of patch text
-  * **total cap:** **800 KB** of combined patch text
-* Determinism: same inputs/settings ⇒ **byte-identical JSON** (sorted keys, stable ordering).
-* Safety: binaries/LFS/submodules = **metadata only** (no raw blobs).
-* Special files: lockfiles/giant generated artifacts → **summarize when capped** (set flags, no big body).
-* No CI, no commit messages, no AST parsing.
+### Key Features
 
-## PLAN (architecture & scope)
+- **Deterministic Output**: Same inputs always produce byte-identical JSON with matching checksums
+- **Capacity Management**: Configurable per-file (64KB) and total (800KB) caps with intelligent truncation
+- **Rename Detection**: 90% threshold with deterministic tie-breaking
+- **Special File Handling**: Lockfiles and generated files are summarized when oversized
+- **Binary/Submodule Safety**: Metadata-only output, no raw blob content
+- **Production Ready**: Comprehensive error handling, signal-safe cleanup, extensive test coverage
 
-* Language: **Python 3.11** (CLI via argparse), tests via **pytest**.
-* Use the **git CLI** via subprocess (no heavy deps).
-* Separate modules:
+## Installation
 
-  1. `vcs.py` — clone, ensure SHAs, list changes, build unified patches (text vs binary vs submodule).
-  2. `diffpack.py` — build file entries, split hunks, detect EOL-only change, summarize lockfiles, rename flags.
-  3. `caps.py` — enforce per-file + global caps; ensure **first & last hunk kept** when truncating.
-  4. `serialize.py` — stable sort, stable JSON encoding (sorted keys), UTF-8 with replacement, checksum.
-  5. `policies.py` — helpers: identify lockfiles/generated (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `*.min.js`, `*.map`, big JSON), submodules.
-  6. `main.py` — wire CLI, orchestrate flow, print JSON to stdout or `--json` path.
-* Tests:
+### Requirements
 
-  * **Unit** tests for capping, hunk splitting, EOL-only detection, rename flag handling.
-  * **Property/determinism** test: same inputs → identical bytes/checksum.
-  * **Local synthetic repo** fixture (no network) to cover A/M/D/R, binary, submodule, lockfile cases.
-  * **Optional integration** test (skipped by default) that runs against the real repo+SHAs you provide.
+- Python 3.11 or higher
+- Git 2.30 or higher
 
-## EXECUTION STEPS (what to implement, in order)
+### Install from Source
 
-1. **Scaffold CLI & config**
+```bash
+git clone <repository-url>
+cd PR-Diff-Ingestion
+make install-dev
+```
 
-   * CLI: `p1diff --repo <url> --good <sha> --cand <sha> [--branch <name>] [--cap-total 800000] [--cap-file 64000] [--context 3] [--find-renames 90] [--json out.json]`
-   * Validate args; normalize numbers; build a config object.
+### Install for Production
 
-2. **Clone workspace**
+```bash
+pip install -e .
+```
 
-   * Create temp dir; clone minimal.
-   * Fetch `commit_good` and `commit_candidate`.
-   * Verify both SHAs exist; if not, exit with JSON error (`COMMIT_NOT_FOUND`).
-   * Never require a working checkout; operate on objects.
+## Usage
 
-3. **Discover change set**
+### Basic Usage
 
-   * Compute file changes between the two SHAs with **rename detection @ 90%**.
-   * Build metadata per file: `status (A/M/D/R/C/T)`, `path_old`, `path_new`, `rename_score?`, `mode_old/new`, `size_old/new`, `is_binary`, `is_submodule`.
-   * Stable order: by `path_new` (or `path_old` if deleted), then by `status`.
+```bash
+p1diff --repo https://github.com/user/repo.git --good abc123 --cand def456
+```
 
-4. **Generate unified patches (text files only)**
+### Full Options
 
-   * Build unified diff with **context = 3** lines (configurable).
-   * Split into hunks with fields:
-     `old_start`, `old_lines`, `new_start`, `new_lines`, `header`, `added`, `deleted`, `patch (text)`
-   * Detect **EOL-only** change (set `eol_only_change:true`).
-   * **Binary/LFS/Submodule**: **no** hunk body; include minimal metadata and, for submodule, old/new submodule SHAs.
+```bash
+p1diff --repo <url> --good <sha> --cand <sha> \
+       [--branch <name>] \
+       [--cap-total 800000] [--cap-file 64000] [--context 3] \
+       [--find-renames 90] \
+       [--json out.json] \
+       [--keep-workdir] [--keep-on-error]
+```
 
-5. **Apply caps & special policies**
+### Options
 
-   * **Per-file cap (64 KB)**: append hunks until cap; on overflow set `truncated:true` and **ensure first & last hunk** are preserved; record `omitted_hunks_count`.
-   * **Global cap (800 KB)**: if adding a file would exceed cap, **do not** include its hunks; increment `omitted_files_count`; keep metadata-only entry.
-   * **Lockfiles/generated**: if patch > per-file cap, set `summarized:true` and omit patch text (cheap count summary optional), no large bodies.
+- `--repo`: Repository URL or local path (required)
+- `--good`: Good commit SHA (baseline) (required)  
+- `--cand`: Candidate commit SHA (comparison target) (required)
+- `--branch`: Branch name (for metadata and fetch hint)
+- `--cap-total`: Total capacity limit in bytes (default: 800000)
+- `--cap-file`: Per-file capacity limit in bytes (default: 64000)
+- `--context`: Number of context lines in diffs (default: 3)
+- `--find-renames`: Rename detection threshold percentage (default: 90)
+- `--json`: Output JSON to file instead of stdout
+- `--keep-workdir`: Keep temporary work directory for debugging
+- `--keep-on-error`: Keep work directory on error for debugging
 
-6. **Serialize deterministically**
+### Examples
 
-   * Build output with:
-     `provenance { repo_url, commit_good, commit_candidate, branch_name?, caps { … }, rename_detection { enabled:true, threshold_pct:90 } }`
-     `files[]` entries as above; `omitted_files_count`; `notes[]`.
-   * **Stable sort** files/hunks; encode to JSON with **sorted keys** and UTF-8 with replacement; compute **SHA-256 checksum** of the JSON bytes and place it at `provenance.checksum`.
+```bash
+# Basic diff between two commits
+p1diff --repo https://github.com/user/repo.git --good v1.0.0 --cand v2.0.0
 
-7. **Error handling (JSON)**
+# Save output to file with custom caps
+p1diff --repo /path/to/local/repo --good abc123 --cand def456 \
+       --cap-total 1000000 --cap-file 100000 --json output.json
 
-   * Return machine-readable errors with codes: `CLONE_FAILED`, `COMMIT_NOT_FOUND`, `CAPS_INVALID`.
-   * Do **not** crash on oversize—emit truncation flags and counts.
+# Debug mode with preserved workspace
+p1diff --repo https://github.com/user/repo.git --good abc123 --cand def456 \
+       --keep-workdir --keep-on-error
+```
 
-8. **Unit tests** (pytest)
+## Output Format
 
-   * Fixtures that create tiny throwaway repos to simulate:
+The tool outputs JSON with a consistent envelope structure:
 
-     * A/M/D changes; **rename** (R) with threshold; **binary** file; **submodule** (gitlink) entry; **EOL-only** change; **lockfile** that exceeds cap; **global cap** overflow.
-   * Determinism test: run twice with same inputs, compare JSON bytes checksum.
-   * Per-file cap test: ensure first & last hunk are present when truncated.
-   * JSON schema sanity (keys present, types plausible).
-
-9. **Optional integration test** (skipped by default)
-
-   * Use (skip if offline):
-
-     * `repo_url`: `https://github.com/presidioforts/direct-finetune-rag-model.git`
-     * `commit_good`: `ba7765dd48c0ba51f4fd12cde48fd100aecdb743`
-     * `commit_candidate`: `d7a39abec5a282b9955afdd1649a5f1bafae35f7`
-     * `branch_name`: `codex/move-prompts-to-external-template-files`
-   * Validate output shape and that `checksum` is stable across two runs.
-
-10. **README**
-
-* Show CLI usage, example output snippet, and the definition of done.
-* Document caps, rename threshold, and flags.
-
-## OUTPUT JSON SHAPE (contract to implement)
+### Success Response
 
 ```json
 {
-  "provenance": {
-    "repo_url": "<string>",
-    "commit_good": "<sha>",
-    "commit_candidate": "<sha>",
-    "branch_name": "<string|optional>",
-    "caps": {"total_bytes": 800000, "per_file_bytes": 64000, "context_lines": 3},
-    "rename_detection": {"enabled": true, "threshold_pct": 90},
-    "checksum": "<sha256>"
-  },
-  "files": [
-    {
-      "status": "A|M|D|R|C|T",
-      "path_old": "<string|null>",
-      "path_new": "<string|null>",
-      "rename_score": "<int|null>",
-      "mode_old": "<string|null>",
-      "mode_new": "<string|null>",
-      "size_old": "<int|null>",
-      "size_new": "<int|null>",
-      "is_binary": "<bool>",
-      "is_submodule": "<bool|default:false>",
-      "eol_only_change": "<bool|default:false>",
-      "summarized": "<bool|default:false>",
-      "truncated": "<bool|default:false>",
-      "omitted_hunks_count": "<int|optional>",
-      "submodule": {"old_sha":"<sha>","new_sha":"<sha>"},
-      "hunks": [
-        {
-          "header": "@@ -<old_start>,<old_lines> +<new_start>,<new_lines> @@",
-          "old_start": "<int>", "old_lines": "<int>",
-          "new_start": "<int>", "new_lines": "<int>",
-          "added": "<int>", "deleted": "<int>",
-          "patch": "<string>"
-        }
-      ]
-    }
-  ],
-  "omitted_files_count": "<int>",
-  "notes": ["<string>", "..."]
+  "ok": true,
+  "data": {
+    "provenance": {
+      "repo_url": "https://github.com/user/repo.git",
+      "commit_good": "abc123...",
+      "commit_candidate": "def456...",
+      "branch_name": "feature-branch",
+      "caps": {
+        "total_bytes": 800000,
+        "per_file_bytes": 64000,
+        "context_lines": 3
+      },
+      "rename_detection": {
+        "enabled": true,
+        "threshold_pct": 90
+      },
+      "git_version": "2.34.1",
+      "diff_algorithm": "myers",
+      "env_locks": {
+        "LC_ALL": "C",
+        "color": "off",
+        "core.autocrlf": "false"
+      },
+      "checksum": "sha256-hash-of-payload"
+    },
+    "files": [
+      {
+        "status": "M",
+        "path_old": "src/file.py",
+        "path_new": "src/file.py",
+        "mode_old": "100644",
+        "mode_new": "100644",
+        "size_old": 1234,
+        "size_new": 1456,
+        "is_binary": false,
+        "is_submodule": false,
+        "eol_only_change": false,
+        "whitespace_only_change": false,
+        "summarized": false,
+        "truncated": false,
+        "hunks": [
+          {
+            "header": "@@ -10,5 +10,6 @@",
+            "old_start": 10,
+            "old_lines": 5,
+            "new_start": 10,
+            "new_lines": 6,
+            "added": 2,
+            "deleted": 1,
+            "patch": "@@ -10,5 +10,6 @@\n context\n-old line\n+new line\n+added line\n context"
+          }
+        ]
+      }
+    ],
+    "omitted_files_count": 0,
+    "notes": []
+  }
 }
 ```
 
-## ACCEPTANCE CHECKLIST (must all pass)
+### Error Response
 
-* Caps enforced; truncations and omissions flagged; never exceed limits.
-* Renames show as `R` with `path_old`, `path_new`, `rename_score`.
-* Binaries and submodules have **no** hunk bodies.
-* EOL-only changes flagged.
-* Deterministic: identical JSON bytes (and `checksum`) for identical inputs/settings.
-* Clear JSON errors for clone/commit/caps issues.
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "COMMIT_NOT_FOUND",
+    "message": "Commits not found: abc123",
+    "details": {
+      "missing_commits": ["abc123"],
+      "repo_url": "https://github.com/user/repo.git"
+    }
+  }
+}
+```
 
----
+### File Status Codes
 
-**Now generate the full implementation (code + tests + README) following the plan above.**
+- `A`: Added
+- `M`: Modified  
+- `D`: Deleted
+- `R`: Renamed
+- `C`: Copied
+- `T`: Type changed
+
+### Error Codes
+
+- `GIT_VERSION_UNSUPPORTED`: Git version < 2.30
+- `CLONE_FAILED`: Repository clone failed
+- `COMMIT_NOT_FOUND`: One or more commits not found
+- `CAPS_INVALID`: Invalid capacity configuration
+- `NETWORK_TIMEOUT`: Network operation timed out
+
+## Development
+
+### Project Structure
+
+```
+PR-Diff-Ingestion/
+├── src/p1diff/           # Main package
+│   ├── __init__.py       # Package initialization
+│   ├── main.py           # CLI entry point and orchestration
+│   ├── config.py         # Configuration management
+│   ├── vcs.py            # Git operations and repository handling
+│   ├── diffpack.py       # Diff processing and hunk splitting
+│   ├── caps.py           # Capacity management and truncation
+│   ├── serialize.py      # Deterministic JSON serialization
+│   ├── policies.py       # File type policies and detection
+│   └── errors.py         # Error definitions and handling
+├── tests/                # Test suite
+│   ├── conftest.py       # Test fixtures and configuration
+│   ├── test_*.py         # Unit tests for each module
+│   └── test_integration.py # Integration tests
+├── docs/                 # Documentation
+├── scripts/              # Utility scripts
+├── pyproject.toml        # Project configuration
+├── requirements*.txt     # Dependencies
+├── Makefile             # Development commands
+└── README.md            # This file
+```
+
+### Development Setup
+
+```bash
+# Clone repository
+git clone <repository-url>
+cd PR-Diff-Ingestion
+
+# Set up development environment
+make dev-setup
+
+# Run tests
+make test
+
+# Run linting and type checking
+make check
+
+# Format code
+make format
+```
+
+### Testing
+
+```bash
+# Run all tests
+make test
+
+# Run unit tests only
+make test-unit
+
+# Run integration tests (requires network)
+make test-integration
+
+# Run with coverage
+make test-coverage
+```
+
+### Architecture
+
+The tool follows a modular architecture with clear separation of concerns:
+
+1. **CLI Layer** (`main.py`): Argument parsing, orchestration, and output formatting
+2. **VCS Layer** (`vcs.py`): Git operations, cloning, and change discovery
+3. **Processing Layer** (`diffpack.py`): Diff parsing and hunk extraction
+4. **Policy Layer** (`caps.py`, `policies.py`): Capacity management and file type handling
+5. **Serialization Layer** (`serialize.py`): Deterministic JSON output
+6. **Configuration Layer** (`config.py`): Settings and validation
+7. **Error Layer** (`errors.py`): Structured error handling
+
+### Key Design Principles
+
+- **Determinism**: Same inputs always produce identical output
+- **Safety**: No raw blob content, signal-safe cleanup
+- **Performance**: Minimal clones, efficient processing
+- **Reliability**: Comprehensive error handling and validation
+- **Maintainability**: Clear module boundaries, extensive tests
+
+## License
+
+MIT License - see LICENSE file for details.
