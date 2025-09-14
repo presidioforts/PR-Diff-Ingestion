@@ -1,6 +1,6 @@
 """Error definitions and handling for P1 Diff tool."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 class P1DiffError(Exception):
@@ -53,7 +53,7 @@ class CloneFailedError(P1DiffError):
 class CommitNotFoundError(P1DiffError):
     """One or more commits not found in repository."""
 
-    def __init__(self, missing_commits: list[str], repo_url: str):
+    def __init__(self, missing_commits: List[str], repo_url: str):
         super().__init__(
             code="COMMIT_NOT_FOUND",
             message=f"Commits not found: {', '.join(missing_commits)}",

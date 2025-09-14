@@ -1,4 +1,8 @@
 # Production dependencies
-# None - using only Python standard library as per spec
+# Core CLI uses only Python standard library as per spec
+# API layer requires FastAPI for MCP integration
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
 
 # Development dependencies (install with: pip install -r requirements-dev.txt)

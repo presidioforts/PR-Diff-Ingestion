@@ -1,4 +1,4 @@
-.PHONY: help install install-dev test test-unit test-integration lint format type-check clean build docs
+.PHONY: help install install-dev test test-unit test-integration lint format type-check clean build docs api-dev api-start api-test api-health
 .DEFAULT_GOAL := help
 
 PYTHON := python3.11
@@ -82,3 +82,18 @@ example-json: ## Run example with JSON output
 		--cand d7a39abec5a282b9955afdd1649a5f1bafae35f7 \
 		--branch codex/move-prompts-to-external-template-files \
 		--json example-output.json
+
+# API Commands
+api-dev: ## Start API server in development mode
+	$(PYTHON) scripts/start_api.py --reload --log-level debug
+
+api-start: ## Start API server in production mode
+	$(PYTHON) scripts/start_api.py --host 0.0.0.0 --workers 4
+
+api-test: ## Test API endpoints
+	curl -X POST "http://localhost:8000/diff" \
+		-H "Content-Type: application/json" \
+		-d '{"repo_url": "https://github.com/presidioforts/direct-finetune-rag-model.git", "commit_good": "ba7765dd48c0ba51f4fd12cde48fd100aecdb743", "commit_candidate": "d7a39abec5a282b9955afdd1649a5f1bafae35f7", "branch_name": "codex/move-prompts-to-external-template-files"}'
+
+api-health: ## Check API health
+	curl -X GET "http://localhost:8000/health"

@@ -1,0 +1,233 @@
+{
+  "data": {
+    "files": [
+      {
+        "hunks": [
+          {
+            "added": 6,
+            "deleted": 0,
+            "header": "@@ -1,2 +1,8 @@",
+            "new_lines": 8,
+            "new_start": 1,
+            "old_lines": 2,
+            "old_start": 1,
+            "patch": "@@ -1,2 +1,8 @@\n # direct-finetune-rag-model\n direct-finetune-rag-model\n+\n+## Prompt Templates\n+\n+System and content-type prompts are stored in Jinja2 templates under `backend/templates`.\n+To override them without modifying the application code, set the `PROMPT_TEMPLATE_DIR`\n+environment variable to a directory containing templates with matching filenames.\n"
+          }
+        ],
+        "is_binary": false,
+        "is_submodule": false,
+        "mode_new": "100644",
+        "mode_old": null,
+        "path_new": "README.md",
+        "path_old": null,
+        "size_new": 335,
+        "size_old": null,
+        "status": "M"
+      },
+      {
+        "hunks": [
+          {
+            "added": 2,
+            "deleted": 0,
+            "header": "@@ -6,6 +6,8 @@ import hashlib",
+            "new_lines": 8,
+            "new_start": 6,
+            "old_lines": 6,
+            "old_start": 6,
+            "patch": "@@ -6,6 +6,8 @@ import hashlib\n import json\n from datetime import datetime\n import os\n+from pathlib import Path\n+from jinja2 import Environment, FileSystemLoader, TemplateNotFound\n from openai import OpenAI\n \n # Initialize Flask app"
+          },
+          {
+            "added": 18,
+            "deleted": 0,
+            "header": "@@ -79,6 +81,24 @@ def init_database():",
+            "new_lines": 24,
+            "new_start": 81,
+            "old_lines": 6,
+            "old_start": 79,
+            "patch": "@@ -79,6 +81,24 @@ def init_database():\n     conn.commit()\n     conn.close()\n \n+# Template loading\n+default_template_dir = Path(__file__).parent / 'templates'\n+override_template_dir = os.getenv('PROMPT_TEMPLATE_DIR')\n+search_paths = [p for p in [override_template_dir, default_template_dir] if p]\n+env = Environment(loader=FileSystemLoader([str(p) for p in search_paths]))\n+\n+def render_prompt(name, **kwargs):\n+    template = env.get_template(name)\n+    return template.render(**kwargs)\n+\n+def get_content_type_prompt(content_type, **kwargs):\n+    kwargs.setdefault('kind', content_type)\n+    template_name = f'content_types/{content_type.upper()}.j2'\n+    try:\n+        return render_prompt(template_name, **kwargs)\n+    except TemplateNotFound:\n+        return render_prompt('content_types/FAQ.j2', **kwargs)\n+\n def generate_hash(content):\n     \"\"\"Generate SHA256 hash for content\"\"\"\n     return hashlib.sha256(content.encode()).hexdigest()"
+          },
+          {
+            "added": 0,
+            "deleted": 30,
+            "header": "@@ -399,36 +419,6 @@ def ai_co_author():",
+            "new_lines": 6,
+            "new_start": 419,
+            "old_lines": 36,
+            "old_start": 399,
+            "patch": "@@ -399,36 +419,6 @@ def ai_co_author():\n         if not user_input:\n             return jsonify({'error': 'Input is required'}), 400\n         \n-        # System prompt for RAG Training Co-Author\n-        system_prompt = \"\"\"You are the RAG Training Co-Author. Given minimal engineer input, you must produce world-class training content and output a JSON payload that matches the production contract:\n-\n-{ \"item\": { ... }, \"data\": [ { ...pair... }, ... ] }\n-\n-This JSON will be pushed to a /train API for sentence-transformer + ChromaDB ingestion, so the output must be immediately valid and production-ready. No extra commentary unless explicitly requested.\n-\n-Rules:\n-- Lifecycle: Content goes DRAFT â†’ APPROVED â†’ TRAINED. (The app manages status; you only generate content).\n-- People: Capture content_creator_email, approver_email, trainer_email when provided (use @company.com).\n-- Metadata (required): kind = {FAQ, RUNBOOK, TROUBLESHOOT}, topic (â‰¤64 chars), tool_type, tool_url (must begin with http(s)://), sdlc_devops_ticket, schema_version = \"v1\", embedding_model_tag = \"all-mpnet-base-v2\"\n-- Quality: Always deliver A+ content: clear, concise, technically correct, end-user ready.\n-- Speed: Fill missing details with best defaults; don't leave empty fields.\n-\n-Content Responsibilities:\n-1. Draft/Rewrite Target (Answer) - Turn raw hints into polished docs. Format by type: RUNBOOK = summary, prerequisites, numbered steps, verify, rollback, references. FAQ = direct crisp answer. TROUBLESHOOT = causes + steps to diagnose/fix.\n-2. Generate Query Variants - Default K = 8 (4 natural questions, 4 keyword search strings). Deduplicate; must differ from primary and each other. Natural: 8â€“120 chars; Keyword: 3â€“64 chars.\n-3. Propose/Validate Metadata - Infer missing fields from context. Ensure tool_url starts with http(s)://.\n-\n-Safety: Never output secrets. Redact (\"[REDACTED]\") if any appear. Output only in English unless instructed.\n-\n-Output Contract:\n-Top-level JSON: { \"item\": { ... }, \"data\": [ { ...pairs... } ] }\n-item fields: id: \"TEMP-ID\" unless provided, metadata: as above, content_creator_email, approver_email, trainer_email, ai_used: true, ai_model: model name, ai_timestamp: current UTC ISO8601, variant_count: int, variant_set_hash: \"TEMP-HASH\" (app finalizes), content_hash: \"TEMP-HASH\" (app finalizes)\n-data[] pairs: Each = { parent_id, pair_id, variant_type, query, target, document_join }\n-pair_id = <parent_id>#qN (q0 = primary)\n-document_join = query + \"\\n\\n<<<Q2T>>>\\n\\n\" + target\n-\n-Self-Check Before Responding: Query â‰¥ 2 chars, Target â‰¥ 3 chars. Metadata all present. At least 4 variants generated. No duplicates. JSON is valid and parses. No extra commentary outside JSON.\"\"\"\n-\n         if client is None:\n             # Fallback response when OpenAI is not available\n             return jsonify({"
+          },
+          {
+            "added": 0,
+            "deleted": 53,
+            "header": "@@ -467,59 +457,6 @@ For conversation initiation, create a welcoming greeting that:",
+            "new_lines": 6,
+            "new_start": 457,
+            "old_lines": 59,
+            "old_start": 467,
+            "patch": "@@ -467,59 +457,6 @@ For conversation initiation, create a welcoming greeting that:\n             current_step = context.get('currentStep', 'welcome')\n             collected_data = context.get('collectedData', {})\n             \n-            # Get content type specific prompts\n-            def get_content_type_prompt(content_type):\n-                prompts = {\n-                    'FAQ': \"\"\"You are the RAG Training Co-Author specializing in FAQ creation.\n-\n-FAQ Content Guidelines:\n-- Create concise, direct answers to common questions\n-- Use clear, conversational language\n-- Structure: Question â†’ Direct Answer â†’ Key Points\n-- Focus on quick, actionable information\n-- Include relevant examples when helpful\n-- Keep answers scannable and easy to digest\n-\n-Query Generation for FAQ:\n-- Generate natural language questions people would ask\n-- Include variations: \"What is...\", \"How do I...\", \"Why does...\", \"When should I...\"\n-- Create keyword searches: \"faq\", \"help\", \"question\", \"answer\"\n-- Include common misspellings and alternative phrasings\"\"\",\n-\n-                    'RUNBOOK': \"\"\"You are the RAG Training Co-Author specializing in RUNBOOK creation.\n-\n-RUNBOOK Content Guidelines:\n-- Create detailed step-by-step operational procedures\n-- Structure: Overview â†’ Prerequisites â†’ Steps â†’ Verification â†’ Rollback\n-- Use numbered steps with clear actions\n-- Include safety warnings and important notes\n-- Add troubleshooting for common issues\n-- Include references and documentation links\n-\n-Query Generation for RUNBOOK:\n-- Generate procedure-based queries: \"How to...\", \"Steps for...\", \"Procedure to...\"\n-- Include keyword searches: \"runbook\", \"procedure\", \"steps\", \"guide\", \"manual\"\n-- Add operational terms: \"deploy\", \"configure\", \"setup\", \"install\"\n-- Include role-specific searches: \"admin\", \"operator\", \"engineer\" \"\"\",\n-\n-                    'TROUBLESHOOT': \"\"\"You are the RAG Training Co-Author specializing in TROUBLESHOOT creation.\n-\n-TROUBLESHOOT Content Guidelines:\n-- Create problem diagnosis and resolution guides\n-- Structure: Problem Description â†’ Root Causes â†’ Diagnostic Steps â†’ Solutions â†’ Prevention\n-- Use clear problem identification criteria\n-- Include multiple solution approaches\n-- Add escalation paths for complex issues\n-- Include prevention and best practices\n-\n-Query Generation for TROUBLESHOOT:\n-- Generate problem-based queries: \"Error...\", \"Fix...\", \"Resolve...\", \"Troubleshoot...\"\n-- Include keyword searches: \"troubleshoot\", \"error\", \"fix\", \"problem\", \"issue\", \"debug\"\n-- Add symptom-based searches: \"not working\", \"failing\", \"broken\", \"stuck\"\n-- Include solution terms: \"solution\", \"workaround\", \"patch\", \"repair\" \"\"\"\n-                }\n-                return prompts.get(content_type, prompts['FAQ'])\n-            \n             # Get the content type from collected data or user input\n             content_type = collected_data.get('kind', 'FAQ')\n             if user_input in ['FAQ', 'RUNBOOK', 'TROUBLESHOOT']:"
+          },
+          {
+            "added": 4,
+            "deleted": 37,
+            "header": "@@ -592,48 +529,15 @@ Respond with natural conversation only.\"\"\"},",
+            "new_lines": 15,
+            "new_start": 529,
+            "old_lines": 48,
+            "old_start": 592,
+            "patch": "@@ -592,48 +529,15 @@ Respond with natural conversation only.\"\"\"},\n                 kind = collected_data.get('kind', content_type)\n                 query = collected_data.get('query', '')\n                 creator_email = collected_data.get('content_creator_email', '')\n-                content_prompt = get_content_type_prompt(kind)\n+                content_prompt = get_content_type_prompt(kind, query=query)\n                 \n                 # Check if user provided substantial content\n                 if len(user_input.strip()) > 50 and not user_input.strip().lower().startswith('http'):\n                     # User provided content, generate training data\n+                    variant_count = 8\n+                    system_prompt = render_prompt('system_prompt.j2', kind=kind, variant_count=variant_count)\n                     conversation_messages = [\n-                        {'role': 'system', 'content': f\"\"\"{content_prompt}\n-\n-You are now generating comprehensive training data for RAG (Retrieval-Augmented Generation) systems.\n-\n-Your task: Transform user-provided content into structured training data with multiple query variants and search strings.\n-\n-Input: User provides a question/title and detailed content\n-Output: JSON with item metadata and training data pairs\n-\n-Format:\n-{{ \"item\": {{ ... }}, \"data\": [ {{ ...pair... }}, ... ] }}\n-\n-This JSON will be pushed to a /train API for sentence-transformer + ChromaDB ingestion, so the output must be immediately valid and production-ready. No extra commentary unless explicitly requested.\n-\n-Rules:\n-- Lifecycle: Content goes DRAFT â†’ APPROVED â†’ TRAINED. (The app manages status; you only generate content).\n-- People: Capture content_creator_email, approver_email, trainer_email when provided (use @company.com).\n-- Metadata (required): kind = {kind}, topic (â‰¤64 chars), tool_type, tool_url (must begin with http(s)://), sdlc_devops_ticket, schema_version = \"v1\", embedding_model_tag = \"all-mpnet-base-v2\"\n-- Quality: Always deliver A+ content: clear, concise, technically correct, end-user ready.\n-- Speed: Fill missing details with best defaults; don't leave empty fields.\n-\n-Content Responsibilities:\n-1. Draft/Rewrite Target (Answer) - Turn raw hints into polished docs. Format by type: RUNBOOK = summary, prerequisites, numbered steps, verify, rollback, references. FAQ = direct crisp answer. TROUBLESHOOT = causes + steps to diagnose/fix.\n-2. Generate Query Variants - Default K = 8 (4 natural questions, 4 keyword search strings). Deduplicate; must differ from primary and each other. Natural: 8â€“120 chars; Keyword: 3â€“64 chars.\n-3. Propose/Validate Metadata - Infer missing fields from context. Ensure tool_url starts with http(s)://.\n-\n-Safety: Never output secrets. Redact (\"[REDACTED]\") if any appear. Output only in English unless instructed.\n-\n-Output Contract:\n-Top-level JSON: {{ \"item\": {{ ... }}, \"data\": [ {{ ...pairs... }} ] }}\n-item fields: id: \"TEMP-ID\" unless provided, metadata: as above, content_creator_email, approver_email, trainer_email, ai_used: true, ai_model: model name, ai_timestamp: current UTC ISO8601, variant_count: int, variant_set_hash: \"TEMP-HASH\" (app finalizes), content_hash: \"TEMP-HASH\" (app finalizes)\n-data[] pairs: Each = {{ parent_id, pair_id, variant_type, query, target, document_join }}\n-pair_id = <parent_id>#qN (q0 = primary)\n-document_join = query + \"\\n\\n<<<Q2T>>>\\n\\n\" + target\n-\n-Self-Check Before Responding: Query â‰¥ 2 chars, Target â‰¥ 3 chars. Metadata all present. At least 4 variants generated. No duplicates. JSON is valid and parses. No extra commentary outside JSON.\"\"\"},\n+                        {'role': 'system', 'content': f\"{content_prompt}\\n\\n{system_prompt}\"},\n                         {'role': 'user', 'content': f\"\"\"Generate training data for this content:\n \n Question/Title: {query}\n"
+          }
+        ],
+        "is_binary": false,
+        "is_submodule": false,
+        "mode_new": "100644",
+        "mode_old": null,
+        "path_new": "backend/app.py",
+        "path_old": null,
+        "size_new": 24757,
+        "size_old": null,
+        "status": "M"
+      },
+      {
+        "hunks": [
+          {
+            "added": 1,
+            "deleted": 0,
+            "header": "@@ -2,3 +2,4 @@ Flask==2.3.3",
+            "new_lines": 4,
+            "new_start": 2,
+            "old_lines": 3,
+            "old_start": 2,
+            "patch": "@@ -2,3 +2,4 @@ Flask==2.3.3\n Flask-CORS==4.0.0\n openai>=1.12.0\n python-dotenv==1.0.0\n+Jinja2>=3.1.2\n"
+          }
+        ],
+        "is_binary": false,
+        "is_submodule": false,
+        "mode_new": "100644",
+        "mode_old": null,
+        "path_new": "backend/requirements.txt",
+        "path_old": null,
+        "size_new": 81,
+        "size_old": null,
+        "status": "M"
+      },
+      {
+        "hunks": [
+          {
+            "added": 15,
+            "deleted": 0,
+            "header": "@@ -0,0 +1,15 @@",
+            "new_lines": 15,
+            "new_start": 1,
+            "old_lines": 0,
+            "old_start": 0,
+            "patch": "@@ -0,0 +1,15 @@\n+You are the RAG Training Co-Author specializing in {{ kind }} creation.\n+\n+FAQ Content Guidelines:\n+- Create concise, direct answers to common questions\n+- Use clear, conversational language\n+- Structure: Question â†’ Direct Answer â†’ Key Points\n+- Focus on quick, actionable information\n+- Include relevant examples when helpful\n+- Keep answers scannable and easy to digest\n+\n+Query Generation for FAQ:\n+- Generate natural language questions people would ask\n+- Include variations: \"What is...\", \"How do I...\", \"Why does...\", \"When should I...\"\n+- Create keyword searches: \"faq\", \"help\", \"question\", \"answer\"\n+- Include common misspellings and alternative phrasings\n"
+          }
+        ],
+        "is_binary": false,
+        "is_submodule": false,
+        "mode_new": "100644",
+        "mode_old": null,
+        "path_new": "backend/templates/content_types/FAQ.j2",
+        "path_old": null,
+        "size_new": 654,
+        "size_old": null,
+        "status": "A"
+      },
+      {
+        "hunks": [
+          {
+            "added": 15,
+            "deleted": 0,
+            "header": "@@ -0,0 +1,15 @@",
+            "new_lines": 15,
+            "new_start": 1,
+            "old_lines": 0,
+            "old_start": 0,
+            "patch": "@@ -0,0 +1,15 @@\n+You are the RAG Training Co-Author specializing in {{ kind }} creation.\n+\n+RUNBOOK Content Guidelines:\n+- Create detailed step-by-step operational procedures\n+- Structure: Overview â†’ Prerequisites â†’ Steps â†’ Verification â†’ Rollback\n+- Use numbered steps with clear actions\n+- Include safety warnings and important notes\n+- Add troubleshooting for common issues\n+- Include references and documentation links\n+\n+Query Generation for RUNBOOK:\n+- Generate procedure-based queries: \"How to...\", \"Steps for...\", \"Procedure to...\"\n+- Include keyword searches: \"runbook\", \"procedure\", \"steps\", \"guide\", \"manual\"\n+- Add operational terms: \"deploy\", \"configure\", \"setup\", \"install\"\n+- Include role-specific searches: \"admin\", \"operator\", \"engineer\"\n"
+          }
+        ],
+        "is_binary": false,
+        "is_submodule": false,
+        "mode_new": "100644",
+        "mode_old": null,
+        "path_new": "backend/templates/content_types/RUNBOOK.j2",
+        "path_old": null,
+        "size_new": 732,
+        "size_old": null,
+        "status": "A"
+      },
+      {
+        "hunks": [
+          {
+            "added": 15,
+            "deleted": 0,
+            "header": "@@ -0,0 +1,15 @@",
+            "new_lines": 15,
+            "new_start": 1,
+            "old_lines": 0,
+            "old_start": 0,
+            "patch": "@@ -0,0 +1,15 @@\n+You are the RAG Training Co-Author specializing in {{ kind }} creation.\n+\n+TROUBLESHOOT Content Guidelines:\n+- Create problem diagnosis and resolution guides\n+- Structure: Problem Description â†’ Root Causes â†’ Diagnostic Steps â†’ Solutions â†’ Prevention\n+- Use clear problem identification criteria\n+- Include multiple solution approaches\n+- Add escalation paths for complex issues\n+- Include prevention and best practices\n+\n+Query Generation for TROUBLESHOOT:\n+- Generate problem-based queries: \"Error...\", \"Fix...\", \"Resolve...\", \"Troubleshoot...\"\n+- Include keyword searches: \"troubleshoot\", \"error\", \"fix\", \"problem\", \"issue\", \"debug\"\n+- Add symptom-based searches: \"not working\", \"failing\", \"broken\", \"stuck\"\n+- Include solution terms: \"solution\", \"workaround\", \"patch\", \"repair\"\n"
+          }
+        ],
+        "is_binary": false,
+        "is_submodule": false,
+        "mode_new": "100644",
+        "mode_old": null,
+        "path_new": "backend/templates/content_types/TROUBLESHOOT.j2",
+        "path_old": null,
+        "size_new": 775,
+        "size_old": null,
+        "status": "A"
+      },
+      {
+        "hunks": [
+          {
+            "added": 28,
+            "deleted": 0,
+            "header": "@@ -0,0 +1,28 @@",
+            "new_lines": 28,
+            "new_start": 1,
+            "old_lines": 0,
+            "old_start": 0,
+            "patch": "@@ -0,0 +1,28 @@\n+You are the RAG Training Co-Author. Given minimal engineer input, you must produce world-class training content for the {{ kind }} type and output a JSON payload that matches the production contract:\n+\n+{ \"item\": { ... }, \"data\": [ { ...pair... }, ... ] }\n+\n+This JSON will be pushed to a /train API for sentence-transformer + ChromaDB ingestion, so the output must be immediately valid and production-ready. No extra commentary unless explicitly requested.\n+\n+Rules:\n+- Lifecycle: Content goes DRAFT â†’ APPROVED â†’ TRAINED. (The app manages status; you only generate content).\n+- People: Capture content_creator_email, approver_email, trainer_email when provided (use @company.com).\n+- Metadata (required): kind = {FAQ, RUNBOOK, TROUBLESHOOT}, topic (â‰¤64 chars), tool_type, tool_url (must begin with http(s)://), sdlc_devops_ticket, schema_version = \"v1\", embedding_model_tag = \"all-mpnet-base-v2\"\n+- Quality: Always deliver A+ content: clear, concise, technically correct, end-user ready.\n+- Speed: Fill missing details with best defaults; don't leave empty fields.\n+\n+Content Responsibilities:\n+1. Draft/Rewrite Target (Answer) - Turn raw hints into polished docs. Format by type: RUNBOOK = summary, prerequisites, numbered steps, verify, rollback, references. FAQ = direct crisp answer. TROUBLESHOOT = causes + steps to diagnose/fix.\n+2. Generate Query Variants - Default K = {{ variant_count | default(8) }} (half natural questions, half keyword search strings). Deduplicate; must differ from primary and each other. Natural: 8â€“120 chars; Keyword: 3â€“64 chars.\n+3. Propose/Validate Metadata - Infer missing fields from context. Ensure tool_url starts with http(s)://.\n+\n+Safety: Never output secrets. Redact (\"[REDACTED]\") if any appear. Output only in English unless instructed.\n+\n+Output Contract:\n+Top-level JSON: { \"item\": { ... }, \"data\": [ { ...pairs... } ] }\n+item fields: id: \"TEMP-ID\" unless provided, metadata: as above, content_creator_email, approver_email, trainer_email, ai_used: true, ai_model: model name, ai_timestamp: current UTC ISO8601, variant_count: int, variant_set_hash: \"TEMP-HASH\" (app finalizes), content_hash: \"TEMP-HASH\" (app finalizes)\n+data[] pairs: Each = { parent_id, pair_id, variant_type, query, target, document_join }\n+pair_id = <parent_id>#qN (q0 = primary)\n+document_join = query + \"\\n\\n<<<Q2T>>>\\n\\n\" + target\n+\n+Self-Check Before Responding: Query â‰¥ 2 chars, Target â‰¥ 3 chars. Metadata all present. At least 4 variants generated. No duplicates. JSON is valid and parses. No extra commentary outside JSON.\n"
+          }
+        ],
+        "is_binary": false,
+        "is_submodule": false,
+        "mode_new": "100644",
+        "mode_old": null,
+        "path_new": "backend/templates/system_prompt.j2",
+        "path_old": null,
+        "size_new": 2535,
+        "size_old": null,
+        "status": "A"
+      }
+    ],
+    "notes": [],
+    "omitted_files_count": 0,
+    "provenance": {
+      "branch_name": "codex/move-prompts-to-external-template-files",
+      "caps": {
+        "context_lines": 3,
+        "per_file_bytes": 64000,
+        "total_bytes": 800000
+      },
+      "checksum": "a825ee3c8a224346ffca3249e2076b04f5d0044f36e98b555463b80916859731",
+      "commit_candidate": "d7a39abec5a282b9955afdd1649a5f1bafae35f7",
+      "commit_good": "ba7765dd48c0ba51f4fd12cde48fd100aecdb743",
+      "diff_algorithm": "myers",
+      "env_locks": {
+        "LC_ALL": "C",
+        "color": "off",
+        "core.autocrlf": "false"
+      },
+      "git_version": "2.50.0",
+      "rename_detection": {
+        "enabled": true,
+        "threshold_pct": 90
+      },
+      "repo_url": "https://github.com/presidioforts/direct-finetune-rag-model.git"
+    }
+  },
+  "ok": true
+}
