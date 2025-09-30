@@ -8,6 +8,4 @@ __version__ = "1.0.0"
 __author__ = "P1 Diff Team"
 __email__ = "dev@p1diff.com"
 
-from .main import main
-
-__all__ = ["main"]
+__all__ = []

@@ -1,6 +1,0 @@
-{
-    "repo_url": "https://github.com/presidioforts/direct-finetune-rag-model.git",
-    "commit_good": "ba7765dd48c0ba51f4fd12cde48fd100aecdb743",
-    "commit_candidate": "d7a39abec5a282b9955afdd1649a5f1bafae35f7",
-    "branch_name": "codex/move-prompts-to-external-template-files"
-}

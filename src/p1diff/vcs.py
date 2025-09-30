@@ -1,5 +1,6 @@
 """Version control system operations for P1 Diff tool."""
 
+import logging
 import os
 import re
 import shutil
@@ -8,6 +9,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from urllib.parse import urlparse, urlunparse
 
 from .config import DiffConfig
 from .errors import (
@@ -16,6 +18,10 @@ from .errors import (
     GitVersionUnsupportedError,
     NetworkTimeoutError,
 )
+from .settings import get_git_credentials
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -67,7 +73,6 @@ class GitRepository:
         capture_output: bool = True,
     ) -> subprocess.CompletedProcess:
         """Run git command with proper environment and error handling."""
-        # Enforce deterministic git behavior across platforms
         cmd = [
             "git",
             "-c",
@@ -75,6 +80,19 @@ class GitRepository:
             "-c",
             "color.ui=false",
         ] + args
+
+        safe_args: List[str] = []
+        for arg in cmd:
+            if isinstance(arg, str) and "@" in arg and "://" in arg:
+                safe_args.append(self.config.repo_url)
+            else:
+                safe_args.append(arg)
+
+        logger.debug(
+            "Running git command",
+            extra={"cwd": str(self.workdir), "git_args": safe_args},
+        )
+
         try:
             result = subprocess.run(
                 cmd,
@@ -85,13 +103,47 @@ class GitRepository:
                 capture_output=capture_output,
                 text=True,
             )
+            logger.debug(
+                "Git command completed",
+                extra={"git_args": safe_args, "returncode": result.returncode},
+            )
             return result
         except subprocess.TimeoutExpired as e:
+            logger.error(
+                "Git command timed out",
+                extra={"git_args": safe_args, "timeout": timeout},
+            )
             raise NetworkTimeoutError("git operation", timeout) from e
         except subprocess.CalledProcessError as e:
-            if "clone" in args[0]:
+            logger.error(
+                "Git command failed",
+                extra={"git_args": safe_args, "returncode": e.returncode, "stderr": e.stderr},
+            )
+            if safe_args and isinstance(safe_args[0], str) and "clone" in safe_args[0]:
                 raise CloneFailedError(self.config.repo_url, e.stderr or str(e)) from e
             raise
+
+    def _get_authenticated_repo_url(self) -> str:
+        """Inject credentials into repo URL when provided via environment."""
+        repo_url = self.config.repo_url
+        username, token = get_git_credentials()
+
+        if not username or not token:
+            return repo_url
+
+        try:
+            parsed = urlparse(repo_url)
+        except ValueError:
+            return repo_url
+
+        if parsed.scheme not in {"http", "https"}:
+            return repo_url
+
+        if parsed.username:
+            return repo_url
+
+        netloc = f"{username}:{token}@{parsed.netloc}"
+        return urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
 
     def validate_git_version(self) -> str:
         """Validate Git version meets minimum requirements."""
@@ -138,15 +190,19 @@ class GitRepository:
             "clone",
             "--no-checkout",
             "--filter=blob:none",
-            self.config.repo_url,
+            self._get_authenticated_repo_url(),
             ".",  # clone into the already-created empty workdir
         ]
+
+        logger.info(
+            "Cloning repository",
+            extra={"repo": self.config.repo_url, "branch": self.config.branch_name},
+        )
 
         if self.config.branch_name:
             clone_args.extend(["--branch", self.config.branch_name])
 
         try:
-            # Run clone within the empty workdir so target "." is valid
             result = subprocess.run(
                 [
                     "git",
@@ -164,6 +220,7 @@ class GitRepository:
                 text=True,
             )
         except Exception as e:
+            logger.exception("Clone failed", extra={"repo": self.config.repo_url})
             raise CloneFailedError(self.config.repo_url, str(e)) from e
 
         # Fetch specific commits if they're not already available
@@ -183,7 +240,10 @@ class GitRepository:
                 missing_commits.append(commit_sha)
 
         if missing_commits:
-            # Try to fetch missing commits
+            logger.info(
+                "Fetching missing commits",
+                extra={"repo": self.config.repo_url, "missing": missing_commits},
+            )
             try:
                 self._run_git(["fetch", "origin"] + missing_commits, timeout=300)
                 # Verify again
@@ -194,8 +254,16 @@ class GitRepository:
                     except subprocess.CalledProcessError:
                         still_missing.append(commit_sha)
                 if still_missing:
+                    logger.error(
+                        "Commits still missing after fetch",
+                        extra={"repo": self.config.repo_url, "missing": still_missing},
+                    )
                     raise CommitNotFoundError(still_missing, self.config.repo_url)
             except subprocess.CalledProcessError:
+                logger.error(
+                    "Failed to fetch missing commits",
+                    extra={"repo": self.config.repo_url, "missing": missing_commits},
+                )
                 raise CommitNotFoundError(missing_commits, self.config.repo_url)
 
     def get_file_changes(self) -> List[FileChange]:
@@ -211,6 +279,10 @@ class GitRepository:
 
         result = self._run_git(diff_args)
         changes = []
+        logger.info(
+            "Parsed file changes",
+            extra={"repo": self.config.repo_url, "raw_lines": len(result.stdout.strip().split("\n"))},
+        )
 
         for line in result.stdout.strip().split("\n"):
             if not line:
@@ -529,3 +601,5 @@ class GitRepository:
             return result.stdout
         except subprocess.CalledProcessError:
             return ""
+
+

@@ -6,3 +6,4 @@ uvicorn[standard]>=0.24.0
 pydantic>=2.5.0
 
 # Development dependencies (install with: pip install -r requirements-dev.txt)
+python-dotenv>=1.0.0

@@ -23,7 +23,8 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [    "python-dotenv>=1.0.0",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -41,9 +42,6 @@ test = [
     "pytest-cov>=4.1.0",
     "pytest-mock>=3.11.1",
 ]
-
-[project.scripts]
-p1diff = "p1diff.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

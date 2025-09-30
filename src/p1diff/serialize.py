@@ -2,10 +2,13 @@
 
 import hashlib
 import json
+import logging
 from typing import Any, Dict, List
 
 from .config import DiffConfig
 from .diffpack import ProcessedFile
+
+logger = logging.getLogger(__name__)
 
 
 class DeterministicSerializer:
@@ -23,31 +26,32 @@ class DeterministicSerializer:
         git_version: str,
     ) -> Dict[str, Any]:
         """Serialize the complete output to a deterministic dictionary."""
-        # Build provenance
+        logger.debug(
+            "Serializing output",
+            extra={
+                "files": len(files),
+                "omitted_files": omitted_files_count,
+                "notes": len(notes),
+            },
+        )
+
         provenance = self.config.to_provenance_dict()
         provenance["git_version"] = git_version
 
-        # Build files array
-        files_data = []
-        for file in files:
-            file_data = self._serialize_file(file)
-            files_data.append(file_data)
-
-        # Sort files deterministically
+        files_data = [self._serialize_file(file) for file in files]
         files_data.sort(key=self._file_sort_key)
 
-        # Build complete payload
         payload = {
             "provenance": provenance,
             "files": files_data,
             "omitted_files_count": omitted_files_count,
-            "notes": sorted(notes),  # Ensure notes are sorted
+            "notes": sorted(notes),
         }
 
-        # Compute checksum
         checksum = self._compute_checksum(payload)
         payload["provenance"]["checksum"] = checksum
 
+        logger.debug("Serialization finished", extra={"checksum": checksum})
         return payload
 
     def _serialize_file(self, file: ProcessedFile) -> Dict[str, Any]:
@@ -64,7 +68,6 @@ class DeterministicSerializer:
             "is_submodule": file.is_submodule,
         }
 
-        # Add optional fields only if they have meaningful values
         if file.rename_score is not None:
             file_data["rename_score"] = file.rename_score
 
@@ -89,7 +92,6 @@ class DeterministicSerializer:
         if file.submodule:
             file_data["submodule"] = file.submodule
 
-        # Add hunks if present
         if file.hunks:
             hunks_data = []
             for hunk in file.hunks:
@@ -105,7 +107,6 @@ class DeterministicSerializer:
                 }
                 hunks_data.append(hunk_data)
 
-            # Sort hunks by position
             hunks_data.sort(key=lambda h: (h["old_start"], h["new_start"]))
             file_data["hunks"] = hunks_data
 
@@ -113,21 +114,39 @@ class DeterministicSerializer:
 
     def _file_sort_key(self, file_data: Dict[str, Any]) -> tuple:
         """Generate sort key for file ordering."""
-        # Sort by effective new path (fallback to old), then by status
         effective_path = file_data.get("path_new") or file_data.get("path_old") or ""
         status = file_data.get("status", "")
         return (effective_path, status)
 
+    def _normalize_structure(self, obj: Any) -> Any:
+        """Return a copy of the object with deterministic ordering applied."""
+        if isinstance(obj, dict):
+            normalized: Dict[str, Any] = {}
+            for key, value in obj.items():
+                normalized_value = self._normalize_structure(value)
+                if key == "files" and isinstance(normalized_value, list):
+                    normalized_value = sorted(normalized_value, key=self._file_sort_key)
+                elif key == "hunks" and isinstance(normalized_value, list):
+                    normalized_value = sorted(
+                        normalized_value,
+                        key=lambda h: (h.get("old_start", 0), h.get("new_start", 0)),
+                    )
+                elif key == "notes" and isinstance(normalized_value, list):
+                    normalized_value = sorted(normalized_value)
+                normalized[key] = normalized_value
+            return normalized
+        if isinstance(obj, list):
+            return [self._normalize_structure(item) for item in obj]
+        return obj
+
     def _compute_checksum(self, payload: Dict[str, Any]) -> str:
         """Compute SHA-256 checksum of the payload."""
-        # Create a copy without the checksum field
         payload_copy = self._deep_copy_without_checksum(payload)
-
-        # Serialize to JSON with deterministic ordering
-        json_bytes = self._to_deterministic_json_bytes(payload_copy)
-
-        # Compute SHA-256
-        return hashlib.sha256(json_bytes).hexdigest()
+        normalized = self._normalize_structure(payload_copy)
+        json_bytes = self._to_deterministic_json_bytes(normalized, normalize=False)
+        checksum = hashlib.sha256(json_bytes).hexdigest()
+        logger.debug("Computed payload checksum", extra={"checksum": checksum})
+        return checksum
 
     def _deep_copy_without_checksum(self, obj: Any) -> Any:
         """Deep copy object, removing checksum field from provenance."""
@@ -135,7 +154,6 @@ class DeterministicSerializer:
             result = {}
             for key, value in obj.items():
                 if key == "provenance":
-                    # Copy provenance but exclude checksum
                     provenance_copy = {}
                     for pkey, pvalue in value.items():
                         if pkey != "checksum":
@@ -144,15 +162,15 @@ class DeterministicSerializer:
                 else:
                     result[key] = self._deep_copy_without_checksum(value)
             return result
-        elif isinstance(obj, list):
+        if isinstance(obj, list):
             return [self._deep_copy_without_checksum(item) for item in obj]
-        else:
-            return obj
+        return obj
 
-    def _to_deterministic_json_bytes(self, obj: Any) -> bytes:
+    def _to_deterministic_json_bytes(self, obj: Any, *, normalize: bool = True) -> bytes:
         """Convert object to deterministic JSON bytes."""
+        data = self._normalize_structure(obj) if normalize else obj
         json_str = json.dumps(
-            obj,
+            data,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -162,8 +180,10 @@ class DeterministicSerializer:
 
     def to_json_string(self, payload: Dict[str, Any]) -> str:
         """Convert payload to pretty-printed JSON string."""
+        logger.debug("Rendering payload to JSON string")
+        normalized = self._normalize_structure(payload)
         return json.dumps(
-            payload,
+            normalized,
             ensure_ascii=False,
             sort_keys=True,
             indent=2,
@@ -171,10 +191,14 @@ class DeterministicSerializer:
 
     def create_success_envelope(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Create success envelope around payload."""
+        logger.debug("Creating success envelope")
         return {"ok": True, "data": payload}
 
-    def create_error_envelope(self, error_code: str, error_message: str, details: Dict[str, Any] = None) -> Dict[str, Any]:
+    def create_error_envelope(
+        self, error_code: str, error_message: str, details: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
         """Create error envelope."""
+        logger.debug("Creating error envelope", extra={"code": error_code})
         error_data = {
             "code": error_code,
             "message": error_message,

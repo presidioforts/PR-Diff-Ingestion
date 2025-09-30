@@ -1,10 +1,13 @@
 """Diff processing and hunk splitting for P1 Diff tool."""
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from .vcs import FileChange
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -72,6 +75,17 @@ class DiffProcessor:
         self, change: FileChange, unified_diff: str
     ) -> ProcessedFile:
         """Process a file change into a structured format."""
+        logger.debug(
+            "Processing file change",
+            extra={
+                "status": change.status,
+                "path_new": change.path_new,
+                "path_old": change.path_old,
+                "binary": change.is_binary,
+                "submodule": change.is_submodule,
+            },
+        )
+
         processed = ProcessedFile(
             status=change.status,
             path_old=change.path_old,
@@ -86,14 +100,12 @@ class DiffProcessor:
             is_submodule=change.is_submodule,
         )
 
-        # Set submodule data if applicable
         if change.is_submodule:
             processed.submodule = {
                 "old_sha": change.submodule_old_sha,
                 "new_sha": change.submodule_new_sha,
             }
 
-        # Process diff if not binary/submodule
         if not change.is_binary and not change.is_submodule and unified_diff:
             processed.hunks = self._split_into_hunks(unified_diff)
             processed.eol_only_change = self._detect_eol_only_change(unified_diff)
@@ -101,6 +113,15 @@ class DiffProcessor:
                 unified_diff
             )
 
+        logger.debug(
+            "Processed file",
+            extra={
+                "path": processed.path_new or processed.path_old,
+                "hunks": len(processed.hunks) if processed.hunks else 0,
+                "eol_only": processed.eol_only_change,
+                "whitespace_only": processed.whitespace_only_change,
+            },
+        )
         return processed
 
     def _split_into_hunks(self, unified_diff: str) -> List[DiffHunk]:
@@ -108,15 +129,13 @@ class DiffProcessor:
         hunks = []
         lines = unified_diff.split("\n")
 
-        current_hunk_lines = []
+        current_hunk_lines: List[str] = []
         current_header = None
         current_header_match = None
 
         for line in lines:
-            # Check if this is a hunk header
             header_match = self.hunk_header_pattern.match(line)
             if header_match:
-                # Process previous hunk if exists
                 if current_header and current_hunk_lines:
                     hunk = self._create_hunk(
                         current_header, current_header_match, current_hunk_lines
@@ -124,15 +143,12 @@ class DiffProcessor:
                     if hunk:
                         hunks.append(hunk)
 
-                # Start new hunk
                 current_header = line
                 current_header_match = header_match
                 current_hunk_lines = []
             elif current_header:
-                # Add line to current hunk
                 current_hunk_lines.append(line)
 
-        # Process final hunk
         if current_header and current_hunk_lines:
             hunk = self._create_hunk(
                 current_header, current_header_match, current_hunk_lines
@@ -140,19 +156,18 @@ class DiffProcessor:
             if hunk:
                 hunks.append(hunk)
 
+        logger.debug("Split unified diff into %s hunks", len(hunks))
         return hunks
 
     def _create_hunk(
         self, header: str, header_match: re.Match, lines: List[str]
     ) -> Optional[DiffHunk]:
         """Create a DiffHunk from header and lines."""
-        # Parse header
         old_start = int(header_match.group(1))
         old_lines = int(header_match.group(2) or "1")
         new_start = int(header_match.group(3))
         new_lines = int(header_match.group(4) or "1")
 
-        # Count added and deleted lines
         added = 0
         deleted = 0
         patch_lines = [header]
@@ -180,20 +195,64 @@ class DiffProcessor:
     def _detect_eol_only_change(self, unified_diff: str) -> bool:
         """Detect if change is only end-of-line differences."""
         lines = unified_diff.split("\n")
-        content_changes = []
+        removed = [
+            line[1:]
+            for line in lines
+            if line.startswith("-") and not line.startswith("---")
+        ]
+        added = [
+            line[1:]
+            for line in lines
+            if line.startswith("+") and not line.startswith("+++")
+        ]
 
-        for line in lines:
-            if line.startswith(("+", "-")) and not line.startswith(("+++", "---")):
-                # Remove the +/- prefix and check content
-                content = line[1:]
-                content_changes.append(content)
-
-        if len(content_changes) != 2:
+        if not removed and not added:
             return False
 
-        # Check if the only difference is line endings
-        line1, line2 = content_changes
-        return line1.rstrip("\r\n") == line2.rstrip("\r\n") and line1 != line2
+        if len(removed) != len(added):
+            return False
+
+        def _normalize(values: List[str]) -> str:
+            normalized = "\n".join(values)
+            normalized = normalized.replace("\r\n", "\n").replace("\r", "")
+            return normalized
+
+        if _normalize(removed) == _normalize(added):
+            logger.debug("Detected EOL-only change via normalization")
+            return True
+
+        suffix_pairs = (("CRLF", "LF"), ("CR", ""), ("LF", ""))
+
+        for old_line, new_line in zip(removed, added):
+            old_base = old_line.rstrip("\r\n")
+            new_base = new_line.rstrip("\r\n")
+
+            if old_base == new_base:
+                continue
+
+            matched = False
+            for old_suffix, new_suffix in suffix_pairs:
+                old_matches = not old_suffix or old_base.endswith(old_suffix)
+                new_matches = not new_suffix or new_base.endswith(new_suffix)
+                if not (old_matches and new_matches):
+                    continue
+
+                old_stem = old_base[: -len(old_suffix)] if old_suffix else old_base
+                new_stem = new_base[: -len(new_suffix)] if new_suffix else new_base
+
+                if old_stem == new_stem:
+                    matched = True
+                    break
+
+            if not matched:
+                logger.debug(
+                    "Change includes content differences beyond EOL",
+                    extra={"old": old_line, "new": new_line},
+                )
+                return False
+
+        logger.debug("Detected EOL-only change via suffix comparison")
+        return True
 
     def _detect_whitespace_only_change(self, unified_diff: str) -> bool:
         """Detect if change is only whitespace differences."""
@@ -210,8 +269,12 @@ class DiffProcessor:
         if not old_content and not new_content:
             return False
 
-        # Compare content without whitespace
         old_normalized = "".join("".join(line.split()) for line in old_content)
         new_normalized = "".join("".join(line.split()) for line in new_content)
 
-        return old_normalized == new_normalized and old_content != new_content
+        result = old_normalized == new_normalized and old_content != new_content
+        if result:
+            logger.debug("Detected whitespace-only change")
+        else:
+            logger.debug("Change includes substantive differences")
+        return result

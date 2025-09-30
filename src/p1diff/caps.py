@@ -1,10 +1,13 @@
 """Capacity management and truncation logic for P1 Diff tool."""
 
+import logging
 from typing import List, Tuple
 
 from .config import DiffConfig
 from .diffpack import DiffHunk, ProcessedFile
 from .policies import FilePolicies
+
+logger = logging.getLogger(__name__)
 
 
 class CapacityManager:
@@ -23,17 +26,38 @@ class CapacityManager:
         self.omitted_files_count = 0
 
         for file in files:
-            # Apply per-file cap first to get the actual size after truncation
+            logger.debug(
+                "Evaluating file against caps",
+                extra={
+                    "path": file.path_new or file.path_old,
+                    "is_binary": file.is_binary,
+                },
+            )
+
             original_file_size = self._calculate_file_size(file)
             if original_file_size > self.config.cap_file:
+                logger.info(
+                    "Applying per-file cap",
+                    extra={
+                        "path": file.path_new or file.path_old,
+                        "size": original_file_size,
+                        "cap": self.config.cap_file,
+                    },
+                )
                 file = self._apply_per_file_cap(file)
-            
-            # Calculate actual file size after potential truncation
+
             final_file_size = self._calculate_file_size(file)
 
-            # Check global cap with post-truncation size
             if self.total_bytes_used + final_file_size > self.config.cap_total:
-                # Exceed global cap - include metadata only
+                logger.info(
+                    "Omitting hunks due to total cap",
+                    extra={
+                        "path": file.path_new or file.path_old,
+                        "current_total": self.total_bytes_used,
+                        "file_size": final_file_size,
+                        "cap_total": self.config.cap_total,
+                    },
+                )
                 original_hunk_count = len(file.hunks) if file.hunks else 0
                 file.hunks = []
                 file.omitted_hunks_count = original_hunk_count
@@ -42,8 +66,16 @@ class CapacityManager:
                 continue
 
             processed_files.append(file)
-            self.total_bytes_used += self._calculate_file_size(file)
+            self.total_bytes_used += final_file_size
 
+        logger.info(
+            "Capacity processing complete",
+            extra={
+                "files_returned": len(processed_files),
+                "total_bytes": self.total_bytes_used,
+                "omitted_files": self.omitted_files_count,
+            },
+        )
         return processed_files, self.omitted_files_count
 
     def _calculate_file_size(self, file: ProcessedFile) -> int:
@@ -62,41 +94,44 @@ class CapacityManager:
         if not file.hunks:
             return file
 
-        # Check if this is a generated file that should be summarized
         file_path = file.path_new or file.path_old
         if file_path and FilePolicies.should_summarize_when_oversized(file_path):
             original_hunk_count = len(file.hunks)
             file.summarized = True
             file.hunks = []
             file.omitted_hunks_count = original_hunk_count
+            logger.info(
+                "Summarizing oversized generated file",
+                extra={"path": file_path, "omitted_hunks": original_hunk_count},
+            )
             return file
 
-        # Apply truncation logic: include hunks until we hit the cap
         original_hunk_count = len(file.hunks)
         truncated_hunks = []
         current_size = 0
-        
-        # Include hunks until we exceed the per-file cap
+
         for hunk in file.hunks:
             hunk_size = len(hunk.patch.encode("utf-8"))
             if current_size + hunk_size <= self.config.cap_file:
                 truncated_hunks.append(hunk)
                 current_size += hunk_size
             else:
-                # Try to include a truncated version with reduced context
                 remaining_space = self.config.cap_file - current_size
-                if remaining_space > 50:  # Only try if we have reasonable space
+                if remaining_space > 50:
                     truncated_hunk = self._truncate_hunk_context(hunk, remaining_space)
                     if truncated_hunk:
                         truncated_hunks.append(truncated_hunk)
                         current_size += len(truncated_hunk.patch.encode("utf-8"))
                 break
 
-        # Update file with truncated hunks
         omitted_count = original_hunk_count - len(truncated_hunks)
         if omitted_count > 0:
             file.truncated = True
             file.omitted_hunks_count = omitted_count
+            logger.info(
+                "Truncated file due to per-file cap",
+                extra={"path": file_path, "omitted_hunks": omitted_count},
+            )
 
         file.hunks = truncated_hunks
         return file
@@ -104,14 +139,12 @@ class CapacityManager:
     def _truncate_hunk_context(self, hunk: DiffHunk, max_size: int) -> DiffHunk:
         """Truncate hunk context to fit within size limit."""
         lines = hunk.patch.split("\n")
-        if len(lines) <= 3:  # Header + minimal content
+        if len(lines) <= 3:
             return None
 
-        # Keep header and try to reduce context
         header_line = lines[0]
         content_lines = lines[1:]
 
-        # Separate context, added, and deleted lines
         context_lines = []
         change_lines = []
 
@@ -121,9 +154,7 @@ class CapacityManager:
             else:
                 context_lines.append(line)
 
-        # Try with minimal context (1 line before/after changes)
         if len(context_lines) > 2:
-            # Keep first and last context line only
             minimal_lines = [header_line]
             if context_lines:
                 minimal_lines.append(context_lines[0])
@@ -133,6 +164,10 @@ class CapacityManager:
 
             minimal_patch = "\n".join(minimal_lines)
             if len(minimal_patch.encode("utf-8")) <= max_size:
+                logger.debug(
+                    "Created truncated hunk",
+                    extra={"added": hunk.added, "deleted": hunk.deleted},
+                )
                 return DiffHunk(
                     header=hunk.header,
                     old_start=hunk.old_start,
@@ -144,4 +179,6 @@ class CapacityManager:
                     patch=minimal_patch,
                 )
 
+        logger.debug("Unable to truncate hunk within remaining space")
         return None
+
